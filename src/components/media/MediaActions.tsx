@@ -1,0 +1,90 @@
+
+import React from 'react';
+import { Play, Film, Star, Tv, Bookmark, Share2, Image, FileText } from "lucide-react";
+import { Button } from "@/components/ui/button";
+
+interface MediaActionsProps {
+    onWatchNow: () => void;
+    onPlayTrailer: () => void;
+    onShowReviews: () => void;
+    onShowSeasons: () => void;
+    onAddToWatchlist: () => void;
+    onShare: () => void;
+    onShowGallery: () => void;
+    onShowTrivia: () => void;
+    mediaType: "movie" | "tv";
+    isInWatchlist: boolean;
+}
+
+export const MediaActions = ({
+    onWatchNow,
+    onPlayTrailer,
+    onShowReviews,
+    onShowSeasons,
+    onAddToWatchlist,
+    onShare,
+    onShowGallery,
+    onShowTrivia,
+    mediaType,
+    isInWatchlist
+}: MediaActionsProps) => {
+    return (
+        <div className="flex flex-wrap gap-3 mb-8">
+            <Button
+                className="gap-2"
+                style={{ backgroundColor: '#0066cc', borderColor: '#0066cc' }}
+                onClick={onWatchNow}
+            >
+                <Play className="h-4 w-4" />
+                Guarda Ora
+            </Button>
+
+            <Button
+                className="gap-2"
+                style={{ backgroundColor: '#ea384c', borderColor: '#ea384c' }}
+                onClick={onPlayTrailer}
+            >
+                <Film className="h-4 w-4" />
+                Trailer
+            </Button>
+
+            <Button
+                className="gap-2"
+                onClick={onShowReviews}
+            >
+                <Star className="h-4 w-4" />
+                Recensioni
+            </Button>
+
+            {mediaType === "tv" && (
+                <Button
+                    className="gap-2"
+                    onClick={onShowSeasons}
+                >
+                    <Tv className="h-4 w-4" />
+                    Stagioni
+                </Button>
+            )}
+
+            <Button variant="outline" className="gap-2" onClick={onAddToWatchlist}>
+                <Bookmark className={`h-4 w-4 ${isInWatchlist ? 'fill-current' : ''}`} />
+                {isInWatchlist ? 'Rimuovi da Watchlist' : 'Aggiungi a Watchlist'}
+            </Button>
+
+            <Button variant="outline" className="gap-2" onClick={onShare}>
+                <Share2 className="h-4 w-4" />
+                Condividi
+            </Button>
+
+            <Button variant="outline" className="gap-2" onClick={onShowGallery}>
+                <Image className="h-4 w-4" />
+                Galleria
+            </Button>
+
+            <Button variant="outline" className="gap-2" onClick={onShowTrivia}>
+                <FileText className="h-4 w-4" />
+                Curiosità
+            </Button>
+        </div>
+    );
+};
