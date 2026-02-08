@@ -200,14 +200,6 @@ const Navbar = () => {
             >
               Sfoglia
             </Link>
-            {canAccess && (
-              <Link
-                to="/storico"
-                className={`transition-colors ${isActive('/storico') ? 'text-accent font-medium' : 'hover:text-accent font-medium'}`}
-              >
-                Storico
-              </Link>
-            )}
           </div>
         </div>
 
