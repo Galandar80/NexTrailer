@@ -30,6 +30,7 @@ interface LibraryState {
   updateStatus: (id: number, mediaType: "movie" | "tv", status: LibraryStatus) => Promise<void>;
   markMovieWatched: (id: number) => Promise<void>;
   toggleEpisodeWatched: (tvId: number, seasonNumber: number, episodeNumber: number) => Promise<void>;
+  setSeasonWatched: (tvId: number, seasonNumber: number, episodeNumbers: number[]) => Promise<void>;
   isEpisodeWatched: (tvId: number, seasonNumber: number, episodeNumber: number) => boolean;
   getItem: (id: number, mediaType: "movie" | "tv") => LibraryItem | undefined;
   syncWithCloud: () => Promise<void>;
@@ -40,6 +41,17 @@ const nowIso = () => new Date().toISOString();
 const getUserStorageKey = () => {
   const uid = auth?.currentUser?.uid || localStorage.getItem("library-user-id");
   return uid ? `library-storage-${uid}` : "library-storage-guest";
+};
+
+const getStoredItemsForUser = (uid: string) => {
+  const raw = localStorage.getItem(`library-storage-${uid}`);
+  if (!raw) return [];
+  try {
+    const data = JSON.parse(raw);
+    return Array.isArray(data?.state?.items) ? data.state.items : [];
+  } catch {
+    return [];
+  }
 };
 
 const userStorage = createJSONStorage(() => ({
@@ -64,7 +76,7 @@ export const useLibraryStore = create<LibraryState>()(
             if (activeUserId !== user.uid) {
               activeUserId = user.uid;
               localStorage.setItem("library-user-id", user.uid);
-              set({ items: [] });
+              set({ items: getStoredItemsForUser(user.uid) });
             }
             await get().syncWithCloud();
           } else {
@@ -172,6 +184,30 @@ export const useLibraryStore = create<LibraryState>()(
           await updateCloud(newItems);
         },
 
+        setSeasonWatched: async (tvId: number, seasonNumber: number, episodeNumbers: number[]) => {
+          if (!auth?.currentUser) return;
+          const updatedAt = nowIso();
+          const items = get().items;
+          const existing = items.find((i) => i.id === tvId && i.media_type === "tv");
+          if (!existing) return;
+          const seasonKey = String(seasonNumber);
+          const progress = existing.episodeProgress || {};
+          const uniqueEpisodes = Array.from(new Set(episodeNumbers)).sort((a, b) => a - b);
+          const newProgress = { ...progress, [seasonKey]: uniqueEpisodes };
+          const newItems = items.map<LibraryItem>((item) =>
+            item.id === tvId && item.media_type === "tv"
+              ? {
+                  ...item,
+                  episodeProgress: newProgress,
+                  status: item.status === "planned" ? "watching" : item.status,
+                  updatedAt
+                }
+              : item
+          );
+          set({ items: newItems });
+          await updateCloud(newItems);
+        },
+
         isEpisodeWatched: (tvId, seasonNumber, episodeNumber) => {
           const item = get().items.find((i) => i.id === tvId && i.media_type === "tv");
           if (!item?.episodeProgress) return false;
@@ -205,6 +241,8 @@ export const useLibraryStore = create<LibraryState>()(
             } else if (get().items.length > 0) {
               await setDoc(userRef, { library: get().items }, { merge: true });
             }
+          } catch (error) {
+            console.error("Sync library failed", error);
           } finally {
             set({ isLoading: false });
           }

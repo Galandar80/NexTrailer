@@ -59,6 +59,9 @@ const Library = () => {
   const [events, setEvents] = useState<LibraryEvent[]>([]);
   const [isLoadingEvents, setIsLoadingEvents] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | LibraryStatus>("all");
+  const [typeFilter, setTypeFilter] = useState<"all" | "movie" | "tv">("all");
+  const [watchedHours, setWatchedHours] = useState(0);
+  const [isLoadingWatchedHours, setIsLoadingWatchedHours] = useState(false);
 
   useEffect(() => {
     const loadEvents = async () => {
@@ -127,6 +130,57 @@ const Library = () => {
     loadEvents();
   }, [items]);
 
+  useEffect(() => {
+    let isMounted = true;
+    const loadWatchedHours = async () => {
+      const tvItems = items.filter((item) => item.media_type === "tv" && item.episodeProgress);
+      if (tvItems.length === 0) {
+        setWatchedHours(0);
+        return;
+      }
+      setIsLoadingWatchedHours(true);
+      let totalMinutes = 0;
+      const cache = new Map<string, { episode_number?: number; runtime?: number }[]>();
+      await Promise.all(
+        tvItems.map(async (item) => {
+          const progress = item.episodeProgress || {};
+          const seasonEntries = Object.entries(progress);
+          await Promise.all(
+            seasonEntries.map(async ([seasonKey, watchedEpisodes]) => {
+              const cacheKey = `${item.id}-${seasonKey}`;
+              let episodes = cache.get(cacheKey);
+              if (!episodes) {
+                const seasonResponse = await fetchWithRetry(
+                  `${API_URL}/tv/${item.id}/season/${seasonKey}?language=it-IT`
+                );
+                if (!seasonResponse.ok) {
+                  return;
+                }
+                const seasonData = await seasonResponse.json();
+                episodes = Array.isArray(seasonData.episodes) ? seasonData.episodes : [];
+                cache.set(cacheKey, episodes);
+              }
+              const watchedSet = new Set(watchedEpisodes);
+              episodes.forEach((episode) => {
+                if (!episode.episode_number) return;
+                if (!watchedSet.has(episode.episode_number)) return;
+                totalMinutes += episode.runtime ?? 0;
+              });
+            })
+          );
+        })
+      );
+      if (isMounted) {
+        setWatchedHours(Math.round((totalMinutes / 60) * 10) / 10);
+        setIsLoadingWatchedHours(false);
+      }
+    };
+    loadWatchedHours();
+    return () => {
+      isMounted = false;
+    };
+  }, [items]);
+
   const handleRemove = async (item: LibraryItem) => {
     await removeItem(item.id, item.media_type);
     toast({
@@ -153,10 +207,17 @@ const Library = () => {
 
   const movieCount = items.filter((item) => item.media_type === "movie").length;
   const tvCount = items.filter((item) => item.media_type === "tv").length;
+  const watchedEpisodesCount = items.reduce((total, item) => {
+    if (item.media_type !== "tv" || !item.episodeProgress) return total;
+    const episodes = Object.values(item.episodeProgress).flat();
+    return total + episodes.length;
+  }, 0);
 
-  const filteredItems = items.filter((item) =>
-    statusFilter === "all" ? true : item.status === statusFilter
-  );
+  const filteredItems = items.filter((item) => {
+    const statusMatch = statusFilter === "all" ? true : item.status === statusFilter;
+    const typeMatch = typeFilter === "all" ? true : item.media_type === typeFilter;
+    return statusMatch && typeMatch;
+  });
 
   const selectedKey = selectedDate ? toDateKey(selectedDate) : "";
   const eventsForSelected = selectedKey
@@ -325,6 +386,41 @@ const Library = () => {
               />
             </div>
 
+            <div className="bg-secondary/20 rounded-2xl p-6 mb-8">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-4">
+                <div>
+                  <p className="text-lg font-semibold">{tvCount}</p>
+                  <p className="text-xs text-muted-foreground">Serie seguite</p>
+                </div>
+                <div>
+                  <p className="text-lg font-semibold">{watchedEpisodesCount}</p>
+                  <p className="text-xs text-muted-foreground">Episodi visti</p>
+                </div>
+                <div>
+                  <p className="text-lg font-semibold">
+                    {isLoadingWatchedHours ? "..." : watchedHours}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Ore passate sulle serie</p>
+                </div>
+                <div>
+                  <p className="text-lg font-semibold">0</p>
+                  <p className="text-xs text-muted-foreground">Commenti</p>
+                </div>
+                <div>
+                  <p className="text-lg font-semibold">0</p>
+                  <p className="text-xs text-muted-foreground">Serie votate</p>
+                </div>
+                <div>
+                  <p className="text-lg font-semibold">0</p>
+                  <p className="text-xs text-muted-foreground">Utenti seguiti</p>
+                </div>
+                <div>
+                  <p className="text-lg font-semibold">0</p>
+                  <p className="text-xs text-muted-foreground">Seguono il profilo</p>
+                </div>
+              </div>
+            </div>
+
             <div className="bg-secondary/20 rounded-2xl p-6 mb-10">
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -371,9 +467,26 @@ const Library = () => {
               <Button
                 variant={statusFilter === "all" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setStatusFilter("all")}
+                onClick={() => {
+                  setStatusFilter("all");
+                  setTypeFilter("all");
+                }}
               >
                 Tutti
+              </Button>
+              <Button
+                variant={typeFilter === "movie" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setTypeFilter("movie")}
+              >
+                Film
+              </Button>
+              <Button
+                variant={typeFilter === "tv" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setTypeFilter("tv")}
+              >
+                Serie TV
               </Button>
               {Object.entries(statusLabels).map(([key, label]) => (
                 <Button

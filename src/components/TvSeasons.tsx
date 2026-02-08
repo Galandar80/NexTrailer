@@ -46,7 +46,7 @@ const TvSeasons = ({ tvId, onClose, variant = "modal" }: TvSeasonsProps) => {
   const [tvPoster, setTvPoster] = useState<string | null>(null);
   const [tvBackdrop, setTvBackdrop] = useState<string | null>(null);
   const [tvFirstAirDate, setTvFirstAirDate] = useState<string | null>(null);
-  const { toggleEpisodeWatched, isEpisodeWatched, addItem, getItem } = useLibraryStore();
+  const { toggleEpisodeWatched, setSeasonWatched, isEpisodeWatched, addItem, getItem } = useLibraryStore();
   const { canAccess } = useAuth();
 
   useEffect(() => {
@@ -161,6 +161,37 @@ const TvSeasons = ({ tvId, onClose, variant = "modal" }: TvSeasonsProps) => {
     await toggleEpisodeWatched(tvId, seasonNumber, episodeNumber);
   };
 
+  const handleMarkSeasonWatched = async (season: Season) => {
+    if (!season.episodes || season.episodes.length === 0) return;
+    const episodeNumbers = season.episodes
+      .map((episode) => episode.episode_number)
+      .filter((episodeNumber) => typeof episodeNumber === "number");
+    if (episodeNumbers.length === 0) return;
+    const existing = getItem(tvId, "tv");
+    if (!existing) {
+      const now = new Date().toISOString();
+      await addItem({
+        id: tvId,
+        media_type: "tv",
+        name: tvName,
+        poster_path: tvPoster,
+        backdrop_path: tvBackdrop,
+        first_air_date: tvFirstAirDate || undefined,
+        status: "watching",
+        addedAt: now,
+        updatedAt: now
+      });
+    }
+    await setSeasonWatched(tvId, season.season_number, episodeNumbers);
+  };
+
+  const isSeasonFullyWatched = (season: Season) => {
+    if (!season.episodes || season.episodes.length === 0) return false;
+    return season.episodes.every((episode) =>
+      isEpisodeWatched(tvId, season.season_number, episode.episode_number)
+    );
+  };
+
   const content = (
     <>
       <h2 className={`text-2xl font-bold mb-6 ${variant === "modal" ? "text-white" : ""}`}>
@@ -215,7 +246,20 @@ const TvSeasons = ({ tvId, onClose, variant = "modal" }: TvSeasonsProps) => {
                     </div>
                     {season.overview && <p className="text-sm mt-2 line-clamp-2">{season.overview}</p>}
                   </div>
-                  <div className="ml-4">
+                  <div className="ml-4 flex items-center gap-2">
+                    {canAccess && season.episodes && (
+                      <Button
+                        variant={isSeasonFullyWatched(season) ? "default" : "outline"}
+                        className="h-8 px-3 text-xs"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleMarkSeasonWatched(season);
+                        }}
+                        disabled={isSeasonFullyWatched(season)}
+                      >
+                        {isSeasonFullyWatched(season) ? "Stagione vista" : "Segna stagione vista"}
+                      </Button>
+                    )}
                     {loadingSeasonDetails === season.season_number ? (
                       <div className="w-6 h-6 animate-spin rounded-full border-t-2 border-b-2 border-accent"></div>
                     ) : expandedSeasons.includes(season.season_number) ? (

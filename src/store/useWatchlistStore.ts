@@ -16,6 +16,17 @@ interface WatchlistState {
     syncWithCloud: () => Promise<void>;
 }
 
+const getStoredItemsForUser = (uid: string) => {
+    const raw = localStorage.getItem(`watchlist-storage-${uid}`);
+    if (!raw) return [];
+    try {
+        const data = JSON.parse(raw);
+        return Array.isArray(data?.state?.items) ? data.state.items : [];
+    } catch {
+        return [];
+    }
+};
+
 export const useWatchlistStore = create<WatchlistState>()(
     persist(
         (set, get) => {
@@ -27,7 +38,7 @@ export const useWatchlistStore = create<WatchlistState>()(
                         if (activeUserId !== user.uid) {
                             activeUserId = user.uid;
                             localStorage.setItem("watchlist-user-id", user.uid);
-                            set({ items: [] });
+                            set({ items: getStoredItemsForUser(user.uid) });
                         }
                         await get().syncWithCloud();
                     } else {
@@ -134,7 +145,7 @@ export const useWatchlistStore = create<WatchlistState>()(
                             await setDoc(userRef, { watchlist: get().items }, { merge: true });
                         }
                     } catch (e) {
-                        console.error("Sync failed", e);
+                        console.error("Sync watchlist failed", e);
                     } finally {
                         set({ isLoading: false });
                     }
