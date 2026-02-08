@@ -12,6 +12,7 @@ import { AuthProvider } from "./context/AuthContext";
 
 // Lazy loading per le pagine
 const Home = lazy(() => import("./pages/Home"));
+const Catalogo = lazy(() => import("./pages/Catalogo"));
 const MediaDetails = lazy(() => import("./pages/MediaDetails"));
 const Search = lazy(() => import("./pages/Search"));
 const GenreBrowse = lazy(() => import("./pages/GenreBrowse"));
@@ -70,6 +71,7 @@ const App = () => {
                 }>
                   <Routes>
                     <Route path="/" element={<Home />} />
+                    <Route path="/catalogo" element={<Catalogo />} />
                     <Route path="/search" element={<Search />} />
                     <Route path="/genres" element={<Genres />} />
                     <Route path="/:mediaType/:id" element={<MediaDetails />} />

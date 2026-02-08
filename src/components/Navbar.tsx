@@ -171,6 +171,12 @@ const Navbar = () => {
               Home
             </Link>
             <Link
+              to="/catalogo"
+              className={`transition-colors ${isActive('/catalogo') ? 'text-accent font-medium' : 'hover:text-accent font-medium'}`}
+            >
+              Catalogo
+            </Link>
+            <Link
               to="/movies"
               className={`transition-colors ${isActive('/movies') ? 'text-accent font-medium' : 'hover:text-accent font-medium'}`}
             >
