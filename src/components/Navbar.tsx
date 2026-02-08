@@ -1,12 +1,13 @@
 
 import { Search, User as UserIcon, LogOut } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useWatchlistStore } from "@/store/useWatchlistStore";
 import { useLibraryStore } from "@/store/useLibraryStore";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useAuth } from "@/context/auth-core";
+import { tmdbApi, MediaItem } from "@/services/tmdbApi";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +25,10 @@ import { useToast } from "@/hooks/use-toast";
 
 const Navbar = () => {
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<MediaItem[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const debouncedQuery = useDebounce(searchQuery, 350);
   const navigate = useNavigate();
   const location = useLocation();
   const { items } = useWatchlistStore();
@@ -43,10 +48,65 @@ const Navbar = () => {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    if (searchQuery.trim()) {
-      navigate(`/search?q=${encodeURIComponent(searchQuery.trim())}`);
-      setSearchQuery("");
+  };
+
+  useEffect(() => {
+    let isActive = true;
+    const query = debouncedQuery.trim();
+
+    if (query.length < 2) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return () => {
+        isActive = false;
+      };
     }
+
+    const runSearch = async () => {
+      setIsSearching(true);
+      try {
+        const { movies, tvShows, people } = await tmdbApi.search(query, 1, { includePeople: true });
+        if (!isActive) return;
+        const combinedResults = [...movies, ...tvShows, ...people];
+        setSearchResults(combinedResults.slice(0, 10));
+      } finally {
+        if (isActive) {
+          setIsSearching(false);
+        }
+      }
+    };
+
+    runSearch();
+
+    return () => {
+      isActive = false;
+    };
+  }, [debouncedQuery]);
+
+  const handleResultSelect = (item: MediaItem) => {
+    setIsSearchOpen(false);
+    setSearchQuery("");
+    if (item.media_type === "person") {
+      navigate(`/person/${item.id}`);
+      return;
+    }
+    navigate(`/${item.media_type}/${item.id}`);
+  };
+
+  const getResultTitle = (item: MediaItem) => {
+    if (item.media_type === "movie") return item.title || "";
+    return item.name || item.title || "";
+  };
+
+  const getResultTypeLabel = (item: MediaItem) => {
+    if (item.media_type === "movie") return "Film";
+    if (item.media_type === "tv") return "Serie TV";
+    return "Persona";
+  };
+
+  const getResultImage = (item: MediaItem) => {
+    const path = item.media_type === "person" ? item.profile_path || item.poster_path : item.poster_path;
+    return path ? tmdbApi.getImageUrl(path, "w185") : "";
   };
 
   const isActive = (path: string) => {
@@ -207,15 +267,67 @@ const Navbar = () => {
           <form
             onSubmit={handleSearch}
             className="hidden md:flex relative items-center"
+            onFocus={() => setIsSearchOpen(true)}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+                setIsSearchOpen(false);
+              }
+            }}
           >
             <input
               type="text"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setIsSearchOpen(true);
+              }}
               placeholder="Cerca titoli, persone..."
               className="bg-secondary/50 rounded-full px-4 py-2 pl-10 text-sm w-48 lg:w-64 focus:outline-none focus:ring-1 focus:ring-accent transition-all focus:w-80"
             />
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            {isSearchOpen && searchQuery.trim().length > 0 && (
+              <div className="absolute left-0 right-0 top-full mt-2 bg-popover border border-border rounded-lg shadow-lg overflow-hidden z-50">
+                {searchQuery.trim().length < 2 ? (
+                  <div className="px-4 py-4 text-sm text-muted-foreground">Scrivi almeno 2 caratteri</div>
+                ) : isSearching ? (
+                  <div className="px-4 py-4 text-sm text-muted-foreground">Ricerca in corso...</div>
+                ) : searchResults.length > 0 ? (
+                  <div className="max-h-80 overflow-y-auto">
+                    {searchResults.map((item) => {
+                      const imageUrl = getResultImage(item);
+
+                      return (
+                        <button
+                          key={`${item.media_type}-${item.id}`}
+                          type="button"
+                          className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/40 text-left"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => handleResultSelect(item)}
+                        >
+                          {imageUrl ? (
+                            <img
+                              src={imageUrl}
+                              alt={getResultTitle(item)}
+                              className="h-12 w-9 rounded object-cover bg-secondary/40"
+                            />
+                          ) : (
+                            <div className="h-12 w-9 rounded bg-secondary/40 flex items-center justify-center text-xs text-muted-foreground">
+                              {getResultTypeLabel(item).charAt(0)}
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{getResultTitle(item)}</p>
+                            <p className="text-xs text-muted-foreground">{getResultTypeLabel(item)}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="px-4 py-4 text-sm text-muted-foreground">Nessun risultato</div>
+                )}
+              </div>
+            )}
           </form>
 
           <Button variant="ghost" className="md:hidden" size="icon" onClick={() => navigate('/search')}>

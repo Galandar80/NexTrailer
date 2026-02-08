@@ -3,7 +3,15 @@ import { API_URL, fetchWithRetry, fetchWithAccessToken } from './config';
 import { Movie, TV, MediaItem } from './types';
 import { mockMovies, mockTvShows } from './mockData';
 
-export const search = async (query: string, page: number = 1): Promise<{movies: Movie[], tvShows: TV[]}> => {
+type SearchOptions = {
+  includePeople?: boolean;
+};
+
+export const search = async (
+  query: string,
+  page: number = 1,
+  options: SearchOptions = {}
+): Promise<{ movies: Movie[]; tvShows: TV[]; people: MediaItem[] }> => {
   try {
     console.log(`Searching for: "${query}" on page ${page}`);
     const url = `${API_URL}/search/multi?language=it-IT&query=${encodeURIComponent(query)}&page=${page}`;
@@ -12,7 +20,7 @@ export const search = async (query: string, page: number = 1): Promise<{movies: 
 
     console.log(`Search results: ${data.results?.length || 0} items found`);
     
-    // Filter out persons and process the remaining media items
+    const people: MediaItem[] = [];
     const movies: Movie[] = [];
     const tvShows: TV[] = [];
     
@@ -31,10 +39,15 @@ export const search = async (query: string, page: number = 1): Promise<{movies: 
           ...item,
           media_type: "tv" as const
         } as TV);
+      } else if (item.media_type === "person" && options.includePeople) {
+        people.push({
+          ...item,
+          media_type: "person" as const
+        });
       }
     });
     
-    return { movies, tvShows };
+    return { movies, tvShows, people };
   } catch (error) {
     console.error("Failed to search content", error);
     
@@ -45,6 +58,7 @@ export const search = async (query: string, page: number = 1): Promise<{movies: 
       const tokenResponse = await fetchWithAccessToken(tokenEndpoint);
       const tokenData = await tokenResponse.json();
       
+      const people: MediaItem[] = [];
       const movies: Movie[] = [];
       const tvShows: TV[] = [];
       
@@ -59,11 +73,16 @@ export const search = async (query: string, page: number = 1): Promise<{movies: 
             ...item,
             media_type: "tv" as const
           } as TV);
+        } else if (item.media_type === "person" && options.includePeople) {
+          people.push({
+            ...item,
+            media_type: "person" as const
+          });
         }
       });
       
-      if (movies.length > 0 || tvShows.length > 0) {
-        return { movies, tvShows };
+      if (movies.length > 0 || tvShows.length > 0 || people.length > 0) {
+        return { movies, tvShows, people };
       }
     } catch (tokenError) {
       console.error("Access token search also failed:", tokenError);
@@ -71,7 +90,8 @@ export const search = async (query: string, page: number = 1): Promise<{movies: 
     
     return { 
       movies: mockMovies as Movie[], 
-      tvShows: mockTvShows as TV[]
+      tvShows: mockTvShows as TV[],
+      people: []
     };
   }
 };

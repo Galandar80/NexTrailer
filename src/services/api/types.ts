@@ -8,6 +8,7 @@ export interface MediaItem {
   id: number;
   title?: string;
   name?: string;
+  profile_path?: string | null;
   poster_path: string | null;
   backdrop_path: string | null;
   media_type: "movie" | "tv" | "person";
