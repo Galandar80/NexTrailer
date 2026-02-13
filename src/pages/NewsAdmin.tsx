@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 
 type NewsArticle = {
   id: string;
+  publicId?: string;
   title: string;
   subtitle: string;
   body: string;
@@ -49,6 +50,18 @@ type TmdbImage = {
 
 const STORAGE_KEY = "news-articles";
 const COMINGSOON_STORAGE_KEY = "comingsoon-articles";
+const toPublicId = (value: string) => {
+  let hash1 = 0;
+  let hash2 = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    hash1 = (hash1 << 5) - hash1 + code;
+    hash1 |= 0;
+    hash2 = (hash2 << 7) - hash2 + code;
+    hash2 |= 0;
+  }
+  return `n${Math.abs(hash1).toString(36)}${Math.abs(hash2).toString(36)}`;
+};
 
 const fetchTmdbImages = async (mediaType: "movie" | "tv", id: number) => {
   const endpoint = `/${mediaType}/${id}/images?include_image_language=it,en,null`;
@@ -102,6 +115,7 @@ const NewsAdmin = () => {
   const [galleryPosters, setGalleryPosters] = useState<TmdbImage[]>([]);
   const [galleryBackdrops, setGalleryBackdrops] = useState<TmdbImage[]>([]);
   const [isGalleryLoading, setIsGalleryLoading] = useState(false);
+  const [isBackfillingIds, setIsBackfillingIds] = useState(false);
   const isSuperAdmin = user?.email?.toLowerCase() === "calisma82@gmail.com";
 
   const handleDelete = async (id: string, targetCollection: NewsArticle["collection"]) => {
@@ -159,6 +173,43 @@ const NewsAdmin = () => {
       loadArticles();
     }
   }, [user, canAccess, isSuperAdmin, loadArticles]);
+
+  const handleBackfillPublicIds = async () => {
+    if (!isFirebaseEnabled || !db) {
+      toast({ title: "Firebase non configurato", variant: "destructive" });
+      return;
+    }
+    setIsBackfillingIds(true);
+    try {
+      const backfillCollection = async (collectionName: NewsArticle["collection"]) => {
+        const snapshot = await getDocs(query(collection(db, collectionName), orderBy("publishedAtTs", "desc"), limit(500)));
+        let updated = 0;
+        for (const entry of snapshot.docs) {
+          const data = entry.data() as NewsArticle;
+          if (data.publicId || !data.sourceUrl) continue;
+          const publicId = toPublicId(data.sourceUrl);
+          await setDoc(doc(db, collectionName, entry.id), { publicId }, { merge: true });
+          updated += 1;
+        }
+        return updated;
+      };
+      const [updatedTop, updatedNews] = await Promise.all([
+        backfillCollection("news_comingsoon"),
+        backfillCollection("news_articles")
+      ]);
+      setArticles((prev) =>
+        prev.map((item) =>
+          item.publicId || !item.sourceUrl ? item : { ...item, publicId: toPublicId(item.sourceUrl) }
+        )
+      );
+      toast({ title: `Public ID aggiornati: ${updatedTop + updatedNews}` });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Errore aggiornamento Public ID";
+      toast({ title: message, variant: "destructive" });
+    } finally {
+      setIsBackfillingIds(false);
+    }
+  };
 
   const openEdit = (article: NewsArticle) => {
     setActiveArticle(article);
@@ -384,6 +435,11 @@ const NewsAdmin = () => {
             <Button onClick={loadArticles} disabled={isLoading}>
               {isLoading ? "Aggiornamento..." : "Aggiorna elenco"}
             </Button>
+            {isSuperAdmin && (
+              <Button variant="outline" onClick={handleBackfillPublicIds} disabled={isBackfillingIds}>
+                {isBackfillingIds ? "Aggiornamento ID..." : "Rigenera ID pubblici"}
+              </Button>
+            )}
           </div>
         </div>
 

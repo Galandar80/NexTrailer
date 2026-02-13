@@ -22,6 +22,7 @@ type RawRssItem = {
 
 type NewsArticle = {
   id: string;
+  publicId?: string;
   title: string;
   subtitle: string;
   body: string;
@@ -184,6 +185,18 @@ const buildExpansionPrompt = (
 };
 
 const toDocId = (value: string) => encodeURIComponent(value);
+const toPublicId = (value: string) => {
+  let hash1 = 0;
+  let hash2 = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    hash1 = (hash1 << 5) - hash1 + code;
+    hash1 |= 0;
+    hash2 = (hash2 << 7) - hash2 + code;
+    hash2 |= 0;
+  }
+  return `n${Math.abs(hash1).toString(36)}${Math.abs(hash2).toString(36)}`;
+};
 
 const parseStoredArticles = (value: string | null) => {
   if (!value) return [] as NewsArticle[];
@@ -196,19 +209,27 @@ const parseStoredArticles = (value: string | null) => {
 
 const normalizeStoredArticles = (items: NewsArticle[]) => {
   return items.map((item) => {
-    if (item.id) return item;
     const derivedId = item.sourceUrl ? toDocId(item.sourceUrl) : "";
-    return { ...item, id: derivedId };
+    const publicId = item.publicId || (item.sourceUrl ? toPublicId(item.sourceUrl) : "");
+    return { ...item, id: item.id || derivedId, publicId };
   }).filter((item) => item.id);
 };
 
 const normalizeComingsoonArticles = (items: NewsArticle[]) => {
   return items.map((item) => {
-    if (item.id) return item;
     const derivedId = item.sourceUrl ? toDocId(item.sourceUrl) : "";
-    return { ...item, id: derivedId };
+    const publicId = item.publicId || (item.sourceUrl ? toPublicId(item.sourceUrl) : "");
+    return { ...item, id: item.id || derivedId, publicId };
   }).filter((item) => item.id);
 };
+
+const withPublicId = (item: NewsArticle) => {
+  const publicId = item.publicId || (item.sourceUrl ? toPublicId(item.sourceUrl) : "");
+  if (!publicId || publicId === item.publicId) return item;
+  return { ...item, publicId };
+};
+
+const getArticleLinkId = (item: NewsArticle) => item.publicId || (item.sourceUrl ? toPublicId(item.sourceUrl) : item.id);
 
 const extractJson = (value: string) => {
   const fenced = value.match(/```json\s*([\s\S]*?)```/i);
@@ -330,7 +351,11 @@ const News = () => {
       const snapshot = await getDocs(newsQuery);
       const fetched = stripWikipediaImages(snapshot.docs.map((entry) => {
         const data = entry.data() as NewsArticle;
-        return { ...data, id: data.id || entry.id };
+        const normalized = withPublicId({ ...data, id: data.id || entry.id });
+        if (!data.publicId && normalized.publicId) {
+          void setDoc(doc(db, "news_articles", entry.id), { publicId: normalized.publicId }, { merge: true });
+        }
+        return normalized;
       }));
       const fetchedIds = new Set(fetched.map((item) => item.id));
       const merged = stripWikipediaImages([...fetched, ...stored.filter((item) => !fetchedIds.has(item.id))]);
@@ -371,7 +396,11 @@ const News = () => {
         const snapshot = await getDocs(newsQuery);
         const fetched = stripWikipediaImages(snapshot.docs.map((entry) => {
           const data = entry.data() as NewsArticle;
-          return { ...data, id: data.id || entry.id };
+          const normalized = withPublicId({ ...data, id: data.id || entry.id });
+          if (!data.publicId && normalized.publicId) {
+            void setDoc(doc(db, "news_comingsoon", entry.id), { publicId: normalized.publicId }, { merge: true });
+          }
+          return normalized;
         }));
         if (fetched.length > 0) {
           setTopArticles(fetched);
@@ -411,7 +440,11 @@ const News = () => {
         const existing = await getDoc(docRef);
         if (existing.exists()) {
           const existingData = existing.data() as NewsArticle;
-          refreshed.push({ ...existingData, id: existingData.id || docId });
+          const normalized = withPublicId({ ...existingData, id: existingData.id || docId });
+          if (!existingData.publicId && normalized.publicId) {
+            void setDoc(docRef, { publicId: normalized.publicId }, { merge: true });
+          }
+          refreshed.push(normalized);
           refreshedIds.add(docId);
           continue;
         }
@@ -419,6 +452,7 @@ const News = () => {
         const publishedAtTs = Date.parse(item.publishedAt) || Date.now();
         const created = {
           id: docId,
+          publicId: toPublicId(item.link),
           title,
           subtitle,
           body,
@@ -471,7 +505,11 @@ const News = () => {
           const existing = await getDoc(docRef);
           if (existing.exists()) {
             const existingData = existing.data() as NewsArticle;
-            refreshed.push(existingData);
+            const normalized = withPublicId({ ...existingData, id: existingData.id || docId });
+            if (!existingData.publicId && normalized.publicId) {
+              void setDoc(docRef, { publicId: normalized.publicId }, { merge: true });
+            }
+            refreshed.push(normalized);
             refreshedIds.add(docId);
             continue;
           }
@@ -481,6 +519,7 @@ const News = () => {
         const imageUrl = item.imageUrl;
         const created = {
           id: docId,
+          publicId: toPublicId(item.link),
           title,
           subtitle,
           body,
@@ -545,7 +584,11 @@ const News = () => {
       const snapshot = await getDocs(newsQuery);
       const fetched = stripWikipediaImages(snapshot.docs.map((entry) => {
         const data = entry.data() as NewsArticle;
-        return { ...data, id: data.id || entry.id };
+        const normalized = withPublicId({ ...data, id: data.id || entry.id });
+        if (!data.publicId && normalized.publicId) {
+          void setDoc(doc(db, "news_articles", entry.id), { publicId: normalized.publicId }, { merge: true });
+        }
+        return normalized;
       }));
       if (fetched.length > 0) {
         setArticles((prev) => [...prev, ...fetched]);
@@ -623,7 +666,7 @@ const News = () => {
         {topArticles.length > 0 && (
           <section className="mb-12 grid gap-6 lg:grid-cols-[2fr,1fr]">
             <Link
-              to={`/news/article?article=${encodeURIComponent(topArticles[0].id)}`}
+                  to={`/news/article?article=${encodeURIComponent(getArticleLinkId(topArticles[0]))}`}
               className="relative overflow-hidden rounded-2xl bg-secondary/30 min-h-[320px] flex items-end"
             >
               {topArticles[0].imageUrl ? (
@@ -651,7 +694,7 @@ const News = () => {
               {topArticles.slice(1, 4).map((item) => (
                 <Link
                   key={item.id}
-                  to={`/news/article?article=${encodeURIComponent(item.id)}`}
+                  to={`/news/article?article=${encodeURIComponent(getArticleLinkId(item))}`}
                   className="flex gap-3 rounded-2xl bg-secondary/20 p-3 hover:bg-secondary/30 transition-colors"
                 >
                   {item.imageUrl ? (
@@ -713,7 +756,7 @@ const News = () => {
                             : ""}
                         </span>
                         <Button asChild variant="link" className="text-accent">
-                          <Link to={`/news/article?article=${encodeURIComponent(article.id)}`}>Leggi tutto</Link>
+                          <Link to={`/news/article?article=${encodeURIComponent(getArticleLinkId(article))}`}>Leggi tutto</Link>
                         </Button>
                       </div>
                     </CardContent>

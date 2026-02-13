@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { doc, getDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/firestore";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { SEO } from "@/components/SEO";
@@ -9,6 +9,7 @@ import { db, isFirebaseEnabled } from "@/services/firebase";
 
 type NewsArticle = {
   id: string;
+  publicId?: string;
   title: string;
   subtitle: string;
   body: string;
@@ -23,6 +24,20 @@ type NewsArticle = {
 const STORAGE_KEY = "news-articles";
 const COMINGSOON_STORAGE_KEY = "comingsoon-articles";
 const toDocId = (value: string) => encodeURIComponent(value);
+const toPublicId = (value: string) => {
+  let hash1 = 0;
+  let hash2 = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    hash1 = (hash1 << 5) - hash1 + code;
+    hash1 |= 0;
+    hash2 = (hash2 << 7) - hash2 + code;
+    hash2 |= 0;
+  }
+  return `n${Math.abs(hash1).toString(36)}${Math.abs(hash2).toString(36)}`;
+};
+const isProbablyUrl = (value: string) => value.startsWith("http://") || value.startsWith("https://");
+const isSourceLike = (value: string) => value.includes("http://") || value.includes("https://") || value.includes("%2F") || value.includes("%3A");
 
 const NewsArticlePage = () => {
   const { id } = useParams();
@@ -30,10 +45,12 @@ const NewsArticlePage = () => {
   const [article, setArticle] = useState<NewsArticle | null>(null);
   const [isMissing, setIsMissing] = useState(false);
 
-  const candidateIds = useMemo(() => {
+  const { candidateDocIds, candidatePublicIds } = useMemo(() => {
     const paramId = searchParams.get("article") || "";
     const raw = paramId || id || "";
-    if (!raw) return [];
+    if (!raw) {
+      return { candidateDocIds: [] as string[], candidatePublicIds: [] as string[] };
+    }
     const decoded = (() => {
       try {
         return decodeURIComponent(raw);
@@ -41,7 +58,19 @@ const NewsArticlePage = () => {
         return raw;
       }
     })();
-    return Array.from(new Set([raw, decoded]));
+    const candidates = [raw, decoded].filter(Boolean);
+    const docIds = new Set<string>();
+    const publicIds = new Set<string>();
+    for (const candidate of candidates) {
+      docIds.add(candidate);
+      if (isProbablyUrl(candidate)) {
+        docIds.add(toDocId(candidate));
+      }
+      if (!isSourceLike(candidate)) {
+        publicIds.add(candidate);
+      }
+    }
+    return { candidateDocIds: Array.from(docIds), candidatePublicIds: Array.from(publicIds) };
   }, [id, searchParams]);
 
   const shareUrl = useMemo(() => {
@@ -117,11 +146,11 @@ const NewsArticlePage = () => {
       const localArticles = stored ? (JSON.parse(stored) as NewsArticle[]) : [];
       const comingsoonArticles = comingsoonStored ? (JSON.parse(comingsoonStored) as NewsArticle[]) : [];
       const normalizedLocal = [...localArticles, ...comingsoonArticles].map((item) => {
-        if (item.id) return item;
         const derivedId = item.sourceUrl ? toDocId(item.sourceUrl) : "";
-        return { ...item, id: derivedId };
+        const publicId = item.publicId || (item.sourceUrl ? toPublicId(item.sourceUrl) : "");
+        return { ...item, id: item.id || derivedId, publicId };
       }).filter((item) => item.id);
-      const localMatch = normalizedLocal.find((item) => candidateIds.includes(item.id));
+      const localMatch = normalizedLocal.find((item) => candidateDocIds.includes(item.id) || (!!item.publicId && candidatePublicIds.includes(item.publicId)));
       if (!isFirebaseEnabled || !db) {
         if (localMatch) {
           setArticle(localMatch);
@@ -132,22 +161,60 @@ const NewsArticlePage = () => {
         return;
       }
       try {
-        for (const candidateId of candidateIds) {
+        for (const candidateId of candidateDocIds) {
           const docRef = doc(db, "news_articles", candidateId);
           const snapshot = await getDoc(docRef);
           if (snapshot.exists()) {
-            setArticle(snapshot.data() as NewsArticle);
+            const data = snapshot.data() as NewsArticle;
+            const publicId = data.publicId || (data.sourceUrl ? toPublicId(data.sourceUrl) : "");
+            setArticle({ ...data, id: data.id || candidateId, publicId });
             setIsMissing(false);
             return;
           }
         }
-        for (const candidateId of candidateIds) {
+        if (candidatePublicIds.length > 0) {
+          for (const candidatePublicId of candidatePublicIds) {
+            const newsQuery = query(
+              collection(db, "news_articles"),
+              where("publicId", "==", candidatePublicId),
+              limit(1)
+            );
+            const snapshot = await getDocs(newsQuery);
+            if (!snapshot.empty) {
+              const docSnap = snapshot.docs[0];
+              const data = docSnap.data() as NewsArticle;
+              setArticle({ ...data, id: data.id || docSnap.id, publicId: data.publicId || candidatePublicId });
+              setIsMissing(false);
+              return;
+            }
+          }
+        }
+        for (const candidateId of candidateDocIds) {
           const docRef = doc(db, "news_comingsoon", candidateId);
           const snapshot = await getDoc(docRef);
           if (snapshot.exists()) {
-            setArticle(snapshot.data() as NewsArticle);
+            const data = snapshot.data() as NewsArticle;
+            const publicId = data.publicId || (data.sourceUrl ? toPublicId(data.sourceUrl) : "");
+            setArticle({ ...data, id: data.id || candidateId, publicId });
             setIsMissing(false);
             return;
+          }
+        }
+        if (candidatePublicIds.length > 0) {
+          for (const candidatePublicId of candidatePublicIds) {
+            const comingQuery = query(
+              collection(db, "news_comingsoon"),
+              where("publicId", "==", candidatePublicId),
+              limit(1)
+            );
+            const snapshot = await getDocs(comingQuery);
+            if (!snapshot.empty) {
+              const docSnap = snapshot.docs[0];
+              const data = docSnap.data() as NewsArticle;
+              setArticle({ ...data, id: data.id || docSnap.id, publicId: data.publicId || candidatePublicId });
+              setIsMissing(false);
+              return;
+            }
           }
         }
         if (localMatch) {
@@ -166,7 +233,7 @@ const NewsArticlePage = () => {
       }
     };
     loadArticle();
-  }, [candidateIds]);
+  }, [candidateDocIds, candidatePublicIds]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">

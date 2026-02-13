@@ -12,6 +12,7 @@ import { db, isFirebaseEnabled } from "@/services/firebase";
 
 type NewsArticle = {
   id: string;
+  publicId?: string;
   title: string;
   subtitle: string;
   body: string;
@@ -28,6 +29,18 @@ const COMINGSOON_STORAGE_KEY = "comingsoon-articles";
 const PAGE_SIZE = 18;
 const MAX_ARCHIVE = 200;
 const toDocId = (value: string) => encodeURIComponent(value);
+const toPublicId = (value: string) => {
+  let hash1 = 0;
+  let hash2 = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    hash1 = (hash1 << 5) - hash1 + code;
+    hash1 |= 0;
+    hash2 = (hash2 << 7) - hash2 + code;
+    hash2 |= 0;
+  }
+  return `n${Math.abs(hash1).toString(36)}${Math.abs(hash2).toString(36)}`;
+};
 
 const parseStoredArticles = (value: string | null) => {
   if (!value) return [] as NewsArticle[];
@@ -40,11 +53,13 @@ const parseStoredArticles = (value: string | null) => {
 
 const normalizeStoredArticles = (items: NewsArticle[]) => {
   return items.map((item) => {
-    if (item.id) return item;
     const derivedId = item.sourceUrl ? toDocId(item.sourceUrl) : "";
-    return { ...item, id: derivedId };
+    const publicId = item.publicId || (item.sourceUrl ? toPublicId(item.sourceUrl) : "");
+    return { ...item, id: item.id || derivedId, publicId };
   }).filter((item) => item.id);
 };
+
+const getArticleLinkId = (item: NewsArticle) => item.publicId || (item.sourceUrl ? toPublicId(item.sourceUrl) : item.id);
 
 const isWikipediaImage = (url?: string) => {
   if (!url) return false;
@@ -91,11 +106,11 @@ const NewsArchive = () => {
       ]);
       const fetchedNews = stripWikipediaImages(newsSnapshot.docs.map((entry) => {
         const data = entry.data() as NewsArticle;
-        return { ...data, id: data.id || entry.id };
+        return { ...data, id: data.id || entry.id, publicId: data.publicId || (data.sourceUrl ? toPublicId(data.sourceUrl) : "") };
       }));
       const fetchedComing = stripWikipediaImages(comingSnapshot.docs.map((entry) => {
         const data = entry.data() as NewsArticle;
-        return { ...data, id: data.id || entry.id };
+        return { ...data, id: data.id || entry.id, publicId: data.publicId || (data.sourceUrl ? toPublicId(data.sourceUrl) : "") };
       }));
       const fetchedNewsIds = new Set(fetchedNews.map((item) => item.id));
       const fetchedComingIds = new Set(fetchedComing.map((item) => item.id));
@@ -225,7 +240,7 @@ const NewsArchive = () => {
                           : ""}
                       </span>
                       <Button asChild variant="link" className="text-accent">
-                        <Link to={`/news/article?article=${encodeURIComponent(article.id)}`}>Leggi tutto</Link>
+                        <Link to={`/news/article?article=${encodeURIComponent(getArticleLinkId(article))}`}>Leggi tutto</Link>
                       </Button>
                     </div>
                   </CardContent>
