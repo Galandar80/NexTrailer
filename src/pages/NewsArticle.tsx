@@ -44,6 +44,72 @@ const NewsArticlePage = () => {
     return Array.from(new Set([raw, decoded]));
   }, [id, searchParams]);
 
+  const shareUrl = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    return window.location.href;
+  }, []);
+
+  const shareTitle = article?.title || "News";
+  const canNativeShare = typeof navigator !== "undefined" && !!navigator.share;
+  const shareText = `${shareTitle}${shareUrl ? ` - ${shareUrl}` : ""}`;
+  const encodedUrl = encodeURIComponent(shareUrl);
+  const encodedTitle = encodeURIComponent(shareTitle);
+  const encodedText = encodeURIComponent(shareText);
+  const seoImage = article?.imageUrl || "/og-image.png";
+
+  const seoDescription = useMemo(() => {
+    if (article?.subtitle) return article.subtitle.trim();
+    if (!article?.body) return "News";
+    const cleaned = article.body.replace(/\s+/g, " ").trim();
+    return cleaned.length > 160 ? `${cleaned.slice(0, 157)}...` : cleaned;
+  }, [article]);
+
+  const publishedIso = useMemo(() => {
+    if (!article?.publishedAt) return "";
+    const parsed = new Date(article.publishedAt);
+    if (Number.isNaN(parsed.getTime())) return "";
+    return parsed.toISOString();
+  }, [article?.publishedAt]);
+
+  const seoJsonLd = useMemo(() => {
+    if (!article) return null;
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const logoUrl = origin ? `${origin}/icon-512.png` : "/icon-512.png";
+    return {
+      "@context": "https://schema.org",
+      "@type": "NewsArticle",
+      headline: article.title,
+      description: seoDescription,
+      image: seoImage.startsWith("http") ? seoImage : origin ? `${origin}${seoImage}` : seoImage,
+      datePublished: publishedIso || undefined,
+      dateModified: publishedIso || undefined,
+      author: {
+        "@type": "Organization",
+        name: "NextTrailer"
+      },
+      publisher: {
+        "@type": "Organization",
+        name: "NextTrailer",
+        logo: {
+          "@type": "ImageObject",
+          url: logoUrl
+        }
+      },
+      mainEntityOfPage: shareUrl || undefined
+    };
+  }, [article, publishedIso, seoDescription, seoImage, shareUrl]);
+
+  const seoType = article ? "article" : "website";
+
+  const handleNativeShare = async () => {
+    if (!shareUrl || !canNativeShare) return;
+    try {
+      await navigator.share({ title: shareTitle, text: shareTitle, url: shareUrl });
+    } catch {
+      return;
+    }
+  };
+
   useEffect(() => {
     const loadArticle = async () => {
       const stored = localStorage.getItem(STORAGE_KEY);
@@ -104,7 +170,18 @@ const NewsArticlePage = () => {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <SEO title={article?.title || "News"} description={article?.subtitle || "News"} />
+      <SEO
+        title={article?.title || "News"}
+        description={seoDescription}
+        image={seoImage}
+        type={seoType}
+        url={shareUrl}
+        publishedTime={article ? publishedIso || undefined : undefined}
+        modifiedTime={article ? publishedIso || undefined : undefined}
+        author={article ? "NextTrailer" : undefined}
+        section={article ? "News" : undefined}
+        jsonLd={seoJsonLd || undefined}
+      />
       <Navbar />
 
       <main className="max-w-screen-lg mx-auto px-4 md:px-8 py-8 space-y-6">
@@ -149,6 +226,58 @@ const NewsArticlePage = () => {
             )}
 
             <p className="text-base leading-relaxed text-foreground/90">{article.body}</p>
+
+            <div className="pt-4 border-t border-muted/30 flex flex-wrap gap-3 items-center">
+              <span className="text-sm text-muted-foreground">Condividi:</span>
+              <Button variant="outline" onClick={handleNativeShare} disabled={!shareUrl || !canNativeShare}>
+                Condividi
+              </Button>
+              <Button asChild variant="outline">
+                <a
+                  href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Facebook
+                </a>
+              </Button>
+              <Button asChild variant="outline">
+                <a
+                  href={`https://twitter.com/intent/tweet?url=${encodedUrl}&text=${encodedTitle}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  X
+                </a>
+              </Button>
+              <Button asChild variant="outline">
+                <a
+                  href={`https://wa.me/?text=${encodedText}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  WhatsApp
+                </a>
+              </Button>
+              <Button asChild variant="outline">
+                <a
+                  href={`https://t.me/share/url?url=${encodedUrl}&text=${encodedTitle}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Telegram
+                </a>
+              </Button>
+              <Button asChild variant="outline">
+                <a
+                  href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  LinkedIn
+                </a>
+              </Button>
+            </div>
           </article>
         )}
       </main>

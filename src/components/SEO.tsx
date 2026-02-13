@@ -8,42 +8,74 @@ interface SEOProps {
     image?: string;
     type?: 'website' | 'article' | 'video.movie' | 'video.tv_show';
     url?: string;
+    publishedTime?: string;
+    modifiedTime?: string;
+    author?: string;
+    section?: string;
+    tags?: string[];
+    jsonLd?: Record<string, unknown> | string;
 }
 
 export const SEO = ({
     title = "NextTrailer - Scopri Film e Serie TV",
     description = "Esplora i film e le serie TV di tendenza, guarda i trailer e crea la tua watchlist personalizzata.",
-    image = "/og-image.png", // Ensure this default image exists or use a remote URL
+    image = "/og-image.png",
     type = "website",
-    url = window.location.href
+    url,
+    publishedTime,
+    modifiedTime,
+    author,
+    section,
+    tags,
+    jsonLd
 }: SEOProps) => {
     const siteTitle = "NextTrailer";
     const fullTitle = title === siteTitle ? title : `${title} | ${siteTitle}`;
+    const resolvedUrl = url || (typeof window !== "undefined" ? window.location.href : "");
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
 
-    // Ensure absolute URL for image
-    const fullImage = image.startsWith('http') ? image : `${window.location.origin}${image}`;
+    const fullImage = image.startsWith('http') ? image : origin ? `${origin}${image}` : image;
+    const jsonLdString = typeof jsonLd === "string" ? jsonLd : jsonLd ? JSON.stringify(jsonLd) : "";
 
     return (
         <Helmet>
-            {/* Standard Metadata */}
             <title>{fullTitle}</title>
             <meta name="description" content={description} />
-            <link rel="canonical" href={url} />
+            <meta name="robots" content="index, follow" />
+            <link rel="canonical" href={resolvedUrl} />
 
-            {/* Open Graph / Facebook */}
             <meta property="og:type" content={type} />
-            <meta property="og:url" content={url} />
+            <meta property="og:url" content={resolvedUrl} />
             <meta property="og:title" content={fullTitle} />
             <meta property="og:description" content={description} />
             <meta property="og:image" content={fullImage} />
+            <meta property="og:image:alt" content={fullTitle} />
             <meta property="og:site_name" content={siteTitle} />
+            <meta property="og:locale" content="it_IT" />
 
-            {/* Twitter */}
             <meta name="twitter:card" content="summary_large_image" />
-            <meta name="twitter:url" content={url} />
+            <meta name="twitter:url" content={resolvedUrl} />
             <meta name="twitter:title" content={fullTitle} />
             <meta name="twitter:description" content={description} />
             <meta name="twitter:image" content={fullImage} />
+            {type === "article" && publishedTime && (
+                <meta property="article:published_time" content={publishedTime} />
+            )}
+            {type === "article" && modifiedTime && (
+                <meta property="article:modified_time" content={modifiedTime} />
+            )}
+            {type === "article" && author && (
+                <meta property="article:author" content={author} />
+            )}
+            {type === "article" && section && (
+                <meta property="article:section" content={section} />
+            )}
+            {type === "article" && tags?.map((tag) => (
+                <meta key={`article-tag-${tag}`} property="article:tag" content={tag} />
+            ))}
+            {jsonLdString && (
+                <script type="application/ld+json">{jsonLdString}</script>
+            )}
         </Helmet>
     );
 };
