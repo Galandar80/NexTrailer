@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { SEO } from "@/components/SEO";
 import { db, isFirebaseEnabled } from "@/services/firebase";
+import { API_URL, fetchWithRetry } from "@/services/api/config";
 import { useAuth } from "@/context/auth-core";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -43,6 +44,187 @@ const PAGE_SIZE = 12;
 const AUTO_REFRESH_MS = 1000 * 60 * 60 * 6;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
+
+const STOP_WORDS = new Set([
+  "a", "ad", "al", "allo", "alla", "ai", "agli", "alle", "anche", "ancora", "che", "chi", "con",
+  "da", "dal", "dallo", "dalla", "dai", "dagli", "dalle", "de", "dei", "degli", "del", "della", "dell",
+  "di", "e", "ed", "fra", "il", "in", "lo", "i", "gli", "la", "le", "ma", "nel", "nello", "nella", "nei",
+  "negli", "nelle", "o", "per", "piu", "più", "quale", "quali", "quanto", "questa", "queste", "questi",
+  "questo", "quella", "quelle", "quelli", "quello", "s", "se", "senza", "si", "su", "sul", "sulla",
+  "sui", "sulle", "tra", "un", "una", "uno", "verso", "the", "a", "an", "and", "or", "of", "to", "for",
+  "in", "on", "with", "by", "from", "is", "are", "was", "were"
+]);
+
+const normalizeForMatch = (value: string) =>
+  value.toLowerCase().replace(/[^a-z0-9à-ÿ]+/gi, " ").trim();
+
+const uniqueList = (items: string[]) => Array.from(new Set(items.filter(Boolean)));
+
+const extractQuoted = (title: string) => {
+  const matches = [...title.matchAll(/["“«](.+?)["”»]/g)].map((match) => match[1]);
+  return uniqueList(matches.map((entry) => normalizeText(entry)));
+};
+
+const extractEntities = (title: string) => {
+  const matches = title.match(/\b[A-ZÀ-Ý][A-Za-zÀ-ÿ0-9'’]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ0-9'’]+){0,4}/g) || [];
+  return uniqueList(matches.map((entry) => normalizeText(entry)));
+};
+
+const extractKeywords = (text: string, limit: number) => {
+  const tokens = normalizeForMatch(text).split(" ").filter(Boolean);
+  const filtered = tokens.filter((token) => token.length > 3 && !STOP_WORDS.has(token));
+  const weighted = filtered.sort((a, b) => b.length - a.length);
+  return uniqueList(weighted).slice(0, limit);
+};
+
+const extractYear = (text: string) => {
+  const match = text.match(/\b(19|20)\d{2}\b/);
+  return match ? match[0] : "";
+};
+
+type TmdbResult = {
+  id: number;
+  media_type: "movie" | "tv";
+  title?: string;
+  name?: string;
+  release_date?: string;
+  first_air_date?: string;
+  popularity?: number;
+  poster_path?: string | null;
+  backdrop_path?: string | null;
+};
+
+type ImageCandidate = {
+  url: string;
+  score: number;
+  source: "tmdb" | "wikipedia";
+};
+
+const buildTmdbQueries = (title: string, subtitle: string, body: string) => {
+  const queries: string[] = [];
+  const trimmedTitle = normalizeText(title);
+  const titleParts = trimmedTitle.split(":").map((part) => normalizeText(part));
+  const quoted = extractQuoted(trimmedTitle);
+  const entities = extractEntities(trimmedTitle);
+  const keywords = extractKeywords(`${title} ${subtitle}`, 6);
+  const bodyKeywords = extractKeywords(body.slice(0, 600), 6);
+
+  queries.push(...quoted);
+  queries.push(trimmedTitle);
+  queries.push(...titleParts.filter((part) => part && part !== trimmedTitle));
+  queries.push(...entities);
+  if (keywords.length > 0) {
+    queries.push(keywords.slice(0, 4).join(" "));
+  }
+  if (bodyKeywords.length > 0) {
+    queries.push(bodyKeywords.slice(0, 4).join(" "));
+  }
+  queries.push(...keywords.slice(0, 3));
+  return uniqueList(queries).slice(0, 10);
+};
+
+const scoreCandidate = (candidate: TmdbResult, query: string, keywords: string[], year: string) => {
+  const title = candidate.title || candidate.name || "";
+  const normalizedTitle = normalizeForMatch(title);
+  const normalizedQuery = normalizeForMatch(query);
+  let score = 0;
+  if (normalizedTitle === normalizedQuery) score += 50;
+  if (normalizedTitle.includes(normalizedQuery) || normalizedQuery.includes(normalizedTitle)) score += 20;
+  const overlap = keywords.filter((token) => normalizedTitle.includes(token)).length;
+  score += overlap * 6;
+  if (candidate.media_type === "movie" || candidate.media_type === "tv") score += 5;
+  if (candidate.backdrop_path) score += 12;
+  if (candidate.poster_path) score += 6;
+  const popularity = typeof candidate.popularity === "number" ? candidate.popularity : 0;
+  score += Math.min(popularity, 40);
+  if (year) {
+    const candidateYear = (candidate.release_date || candidate.first_air_date || "").slice(0, 4);
+    if (candidateYear === year) score += 10;
+  }
+  return score;
+};
+
+const getBestTmdbImage = async (title: string, subtitle: string, body: string) => {
+  const queries = buildTmdbQueries(title, subtitle, body);
+  const keywords = extractKeywords(`${title} ${subtitle} ${body.slice(0, 600)}`, 8);
+  const year = extractYear(`${title} ${subtitle} ${body}`);
+  let best: { score: number; candidate: TmdbResult } | null = null;
+
+  for (const query of queries) {
+    const url = `${API_URL}/search/multi?language=it-IT&query=${encodeURIComponent(query)}&page=1`;
+    const response = await fetchWithRetry(url);
+    const data = await response.json();
+    const results = (data.results || []) as TmdbResult[];
+    const filtered = results.filter((item) => item.media_type === "movie" || item.media_type === "tv");
+    for (const candidate of filtered) {
+      const score = scoreCandidate(candidate, query, keywords, year);
+      if (!best || score > best.score) {
+        best = { score, candidate };
+      }
+    }
+  }
+
+  if (!best) return undefined;
+  const imagePath = best.candidate.backdrop_path || best.candidate.poster_path || "";
+  if (!imagePath) return undefined;
+  return { url: `https://image.tmdb.org/t/p/w780${imagePath}`, score: best.score, source: "tmdb" };
+};
+
+const scoreWikipediaTitle = (title: string, query: string, keywords: string[]) => {
+  const normalizedTitle = normalizeForMatch(title);
+  const normalizedQuery = normalizeForMatch(query);
+  let score = 0;
+  if (normalizedTitle === normalizedQuery) score += 70;
+  if (normalizedTitle.includes(normalizedQuery) || normalizedQuery.includes(normalizedTitle)) score += 30;
+  const overlap = keywords.filter((token) => normalizedTitle.includes(token)).length;
+  score += overlap * 6;
+  return score;
+};
+
+const fetchWikipediaImage = async (title: string) => {
+  const url = `https://it.wikipedia.org/w/api.php?action=query&prop=pageimages&titles=${encodeURIComponent(title)}&pithumbsize=780&format=json&origin=*`;
+  const response = await fetchWithRetry(url);
+  const data = await response.json();
+  const pages = data?.query?.pages || {};
+  const firstPage = Object.values(pages)[0] as { thumbnail?: { source?: string } } | undefined;
+  const source = firstPage?.thumbnail?.source || "";
+  return source || undefined;
+};
+
+const getBestWikipediaImage = async (title: string, subtitle: string, body: string) => {
+  const queries = buildTmdbQueries(title, subtitle, body);
+  const keywords = extractKeywords(`${title} ${subtitle} ${body.slice(0, 600)}`, 8);
+  let best: { title: string; score: number } | null = null;
+
+  for (const query of queries) {
+    const url = `https://it.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*`;
+    const response = await fetchWithRetry(url);
+    const data = await response.json();
+    const results = (data?.query?.search || []) as { title: string }[];
+    for (const result of results.slice(0, 5)) {
+      const score = scoreWikipediaTitle(result.title, query, keywords);
+      if (!best || score > best.score) {
+        best = { title: result.title, score };
+      }
+    }
+  }
+
+  if (!best) return undefined;
+  const imageUrl = await fetchWikipediaImage(best.title);
+  if (!imageUrl) return undefined;
+  return { url: imageUrl, score: best.score, source: "wikipedia" };
+};
+
+const getBestArticleImage = async (title: string, subtitle: string, body: string) => {
+  const [tmdb, wiki] = await Promise.all([
+    getBestTmdbImage(title, subtitle, body),
+    getBestWikipediaImage(title, subtitle, body)
+  ]);
+  const candidates = [tmdb, wiki].filter(Boolean) as ImageCandidate[];
+  if (candidates.length === 0) return undefined;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].url;
+};
 
 const extractImageUrl = (html: string) => {
   if (!html) return undefined;
@@ -342,13 +524,14 @@ const News = () => {
           const body = normalizeText(rewritten.body || item.contentText);
           const bullets = Array.isArray(rewritten.bullets) ? rewritten.bullets.map((entry: string) => normalizeText(entry)).filter(Boolean) : [];
           const publishedAtTs = Date.parse(item.publishedAt) || Date.now();
+          const imageUrl = await getBestArticleImage(title, subtitle, body);
           const created = {
             id: docId,
             title,
             subtitle,
             body,
             bullets,
-            imageUrl: item.imageUrl,
+            imageUrl: imageUrl || item.imageUrl,
             sourceUrl: item.link,
             sourceTitle: item.title,
             publishedAt: item.publishedAt,
@@ -406,13 +589,14 @@ const News = () => {
         const body = normalizeText(rewritten.body || item.contentText);
         const bullets = Array.isArray(rewritten.bullets) ? rewritten.bullets.map((entry: string) => normalizeText(entry)).filter(Boolean) : [];
         const publishedAtTs = Date.parse(item.publishedAt) || Date.now();
+        const imageUrl = await getBestArticleImage(title, subtitle, body);
         const created = {
           id: docId,
           title,
           subtitle,
           body,
           bullets,
-          imageUrl: item.imageUrl,
+          imageUrl: imageUrl || item.imageUrl,
           sourceUrl: item.link,
           sourceTitle: item.title,
           publishedAt: item.publishedAt,
