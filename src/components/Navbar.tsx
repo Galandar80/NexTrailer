@@ -115,6 +115,7 @@ const Navbar = () => {
   const isActive = (path: string) => {
     return location.pathname === path;
   };
+  const isNewsActive = location.pathname.startsWith("/news");
 
   const handleEmailLogin = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -234,22 +235,16 @@ const Navbar = () => {
               Home
             </Link>
             <Link
+              to="/news"
+              className={`transition-colors ${isNewsActive ? 'text-accent font-medium' : 'hover:text-accent font-medium'}`}
+            >
+              News
+            </Link>
+            <Link
               to="/catalogo"
               className={`transition-colors ${isActive('/catalogo') ? 'text-accent font-medium' : 'hover:text-accent font-medium'}`}
             >
               Catalogo
-            </Link>
-            <Link
-              to="/movies"
-              className={`transition-colors ${isActive('/movies') ? 'text-accent font-medium' : 'hover:text-accent font-medium'}`}
-            >
-              Film
-            </Link>
-            <Link
-              to="/tv"
-              className={`transition-colors ${isActive('/tv') ? 'text-accent font-medium' : 'hover:text-accent font-medium'}`}
-            >
-              Serie TV
             </Link>
             <Link
               to="/oscar"
