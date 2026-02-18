@@ -57,6 +57,10 @@ const Genres = () => {
         navigate(`/${activeTab}/genre/${genreId}?name=${encodeURIComponent(genreName)}`);
     };
 
+    const handleAllClick = () => {
+        navigate(`/${activeTab}/genre/all?name=${encodeURIComponent("Tutti")}`);
+    };
+
     return (
         <div className="min-h-screen bg-background text-foreground">
             <Navbar />
@@ -91,6 +95,19 @@ const Genres = () => {
 
                 {/* Griglia Generi */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                    <button
+                        onClick={handleAllClick}
+                        className="group relative aspect-square bg-secondary/20 hover:bg-secondary/40 rounded-lg transition-all duration-300 hover:scale-105 hover:shadow-lg border border-muted/30 hover:border-accent/50"
+                    >
+                        <div className="absolute inset-0 flex flex-col items-center justify-center p-4">
+                            <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">
+                                ⭐
+                            </span>
+                            <span className="text-sm font-medium text-center group-hover:text-accent transition-colors">
+                                Tutti
+                            </span>
+                        </div>
+                    </button>
                     {genres.map((genre) => (
                         <button
                             key={genre.id}

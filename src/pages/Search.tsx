@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from "react";
 import { Search as SearchIcon, Filter, X } from "lucide-react";
 import { tmdbApi, MediaItem, Genre } from "@/services/tmdbApi";
+import { DiscoverFilters } from "@/services/api/discoverApi";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import ContentRow from "@/components/ContentRow";
@@ -23,10 +24,11 @@ const Search = () => {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MediaItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(true);
+  const [syncedQuery, setSyncedQuery] = useState<string | null>(null);
 
   // Filters
-  const [mediaType, setMediaType] = useState<"movie" | "tv">("movie");
+  const [mediaType, setMediaType] = useState<"all" | "movie" | "tv" | "person">("all");
   const [selectedGenre, setSelectedGenre] = useState<string>("all");
   const [selectedYear, setSelectedYear] = useState<string>("all");
   const [availableGenres, setAvailableGenres] = useState<Genre[]>([]);
@@ -36,7 +38,10 @@ const Search = () => {
   const years = Array.from({ length: 50 }, (_, i) => (currentYear - i).toString());
 
   useEffect(() => {
-    // Load genres on mount
+    if (mediaType === "person" || mediaType === "all") {
+      setAvailableGenres([]);
+      return;
+    }
     const loadGenres = async () => {
       try {
         const genres = await tmdbApi.getGenres(mediaType);
@@ -70,11 +75,20 @@ const Search = () => {
         // So we just search by text. 
         // Improvement: We could client-side filter if the result set was huge, but for now simple search.
         const searchResults = await tmdbApi.search(activeQuery, 1, { includePeople: true });
-        data = searchResults.results;
+        if (mediaType === "person") {
+          data = searchResults.results.filter((item) => item.media_type === "person");
+        } else if (mediaType === "all") {
+          data = searchResults.results;
+        } else {
+          data = searchResults.results.filter((item) => item.media_type === mediaType);
+        }
       } else {
         // Discover (Filter) Search
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const filters: any = {
+        if (mediaType === "person" || mediaType === "all") {
+          setResults([]);
+          return;
+        }
+        const filters: DiscoverFilters = {
           mediaType,
           page: 1
         };
@@ -101,20 +115,27 @@ const Search = () => {
 
   useEffect(() => {
     const urlQuery = searchParams.get("q") || "";
-    if (urlQuery && urlQuery !== query) {
+    if (urlQuery && urlQuery !== syncedQuery) {
       setQuery(urlQuery);
+      setSyncedQuery(urlQuery);
       handleSearch(undefined, urlQuery);
     }
-  }, [searchParams, handleSearch, query]);
+  }, [searchParams, handleSearch, query, syncedQuery]);
 
-  // Trigger search when filters change (if query is empty)
+  // Trigger search when filters change
   useEffect(() => {
-    if (!query.trim()) {
-      handleSearch();
-    }
+    handleSearch();
   }, [mediaType, selectedGenre, selectedYear, handleSearch, query]);
 
+  useEffect(() => {
+    if (mediaType === "person" || mediaType === "all") {
+      setSelectedGenre("all");
+      setSelectedYear("all");
+    }
+  }, [mediaType]);
+
   const clearFilters = () => {
+    setMediaType("all");
     setSelectedGenre("all");
     setSelectedYear("all");
   };
@@ -163,7 +184,7 @@ const Search = () => {
             <div className="mt-4 p-4 bg-secondary/10 rounded-lg border border-white/5 animate-in slide-in-from-top-2">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-semibold text-sm uppercase tracking-wider text-muted-foreground">Filtri Avanzati</h3>
-                {(selectedGenre !== "all" || selectedYear !== "all") && (
+                {(mediaType !== "all" || selectedGenre !== "all" || selectedYear !== "all") && (
                   <Button variant="ghost" size="sm" onClick={clearFilters} className="h-8 text-xs text-red-400 hover:text-red-300">
                     <X className="h-3 w-3 mr-1" /> Azzera
                   </Button>
@@ -176,6 +197,12 @@ const Search = () => {
                   <label className="text-xs font-medium">Tipo</label>
                   <div className="flex bg-secondary/30 p-1 rounded-md">
                     <button
+                      onClick={() => setMediaType("all")}
+                      className={`flex-1 py-1.5 text-sm rounded-sm transition-all ${mediaType === "all" ? "bg-accent text-white shadow" : "text-muted-foreground hover:text-white"}`}
+                    >
+                      Tutti
+                    </button>
+                    <button
                       onClick={() => setMediaType("movie")}
                       className={`flex-1 py-1.5 text-sm rounded-sm transition-all ${mediaType === "movie" ? "bg-accent text-white shadow" : "text-muted-foreground hover:text-white"}`}
                     >
@@ -187,13 +214,19 @@ const Search = () => {
                     >
                       Serie TV
                     </button>
+                    <button
+                      onClick={() => setMediaType("person")}
+                      className={`flex-1 py-1.5 text-sm rounded-sm transition-all ${mediaType === "person" ? "bg-accent text-white shadow" : "text-muted-foreground hover:text-white"}`}
+                    >
+                      Attore
+                    </button>
                   </div>
                 </div>
 
                 {/* Genre */}
                 <div className="space-y-2">
                   <label className="text-xs font-medium">Genere</label>
-                  <Select value={selectedGenre} onValueChange={setSelectedGenre}>
+                  <Select value={selectedGenre} onValueChange={setSelectedGenre} disabled={mediaType === "person" || mediaType === "all"}>
                     <SelectTrigger className="bg-secondary/20 border-secondary/40">
                       <SelectValue placeholder="Tutti i generi" />
                     </SelectTrigger>
@@ -209,7 +242,7 @@ const Search = () => {
                 {/* Year */}
                 <div className="space-y-2">
                   <label className="text-xs font-medium">Anno</label>
-                  <Select value={selectedYear} onValueChange={setSelectedYear}>
+                  <Select value={selectedYear} onValueChange={setSelectedYear} disabled={mediaType === "person" || mediaType === "all"}>
                     <SelectTrigger className="bg-secondary/20 border-secondary/40">
                       <SelectValue placeholder="Tutti gli anni" />
                     </SelectTrigger>

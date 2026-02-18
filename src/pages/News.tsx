@@ -128,11 +128,13 @@ const parseRss = (xmlText: string): RawRssItem[] => {
     const pubDate = item.getElementsByTagName("pubDate")[0]?.textContent || "";
     const mediaNode = item.getElementsByTagName("media:content")[0];
     const mediaUrl = mediaNode?.getAttribute("url") || "";
+    const mediaThumb = item.getElementsByTagName("media:thumbnail")[0]?.getAttribute("url") || "";
+    const enclosureUrl = item.getElementsByTagName("enclosure")[0]?.getAttribute("url") || "";
     const encoded = item.getElementsByTagName("content:encoded")[0]?.textContent || "";
     const description = item.getElementsByTagName("description")[0]?.textContent || "";
     const contentHtml = encoded || description || "";
     const contentText = extractText(contentHtml);
-    const imageUrl = mediaUrl || extractImageUrl(contentHtml);
+    const imageUrl = mediaUrl || mediaThumb || enclosureUrl || extractImageUrl(contentHtml);
     return {
       title: normalizeText(title),
       link: normalizeText(link),
@@ -251,52 +253,82 @@ const extractJson = (value: string) => {
   return value.trim();
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const callGroq = async (prompt: string) => {
   const apiKey = import.meta.env.VITE_GROQ_API_KEY as string | undefined;
   if (!apiKey) {
     throw new Error("Manca VITE_GROQ_API_KEY");
   }
   const model = (import.meta.env.VITE_GROQ_MODEL as string | undefined) || "llama-3.1-8b-instant";
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: "Rispondi solo in JSON valido." },
-        { role: "user", content: prompt }
-      ],
-      temperature: 0.6,
-      response_format: { type: "json_object" }
-    })
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    let message = errorText;
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
     try {
-      const parsed = JSON.parse(errorText);
-      message = parsed?.error?.message || message;
-    } catch {
-      message = errorText || message;
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: "Rispondi solo in JSON valido." },
+            { role: "user", content: prompt }
+          ],
+          temperature: 0.6,
+          response_format: { type: "json_object" }
+        }),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        let message = errorText;
+        try {
+          const parsed = JSON.parse(errorText);
+          message = parsed?.error?.message || message;
+        } catch {
+          message = errorText || message;
+        }
+        const error = new Error(`Groq ${response.status}: ${message || "Errore richiesta"}`);
+        lastError = error;
+        if (response.status >= 500 || response.status === 429) {
+          await sleep(700 * (attempt + 1));
+          continue;
+        }
+        throw error;
+      }
+      const data = await response.json();
+      const text = data?.choices?.[0]?.message?.content || "";
+      const jsonText = extractJson(text);
+      try {
+        return JSON.parse(jsonText);
+      } catch {
+        return { title: "", subtitle: "", body: jsonText || text, bullets: [] };
+      }
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error("Errore richiesta Groq");
+      lastError = err;
+      if (err.name === "AbortError") {
+        lastError = new Error("Groq timeout");
+      }
+      if (attempt < 2) {
+        await sleep(700 * (attempt + 1));
+        continue;
+      }
+      throw lastError;
+    } finally {
+      clearTimeout(timeoutId);
     }
-    throw new Error(`Groq ${response.status}: ${message || "Errore richiesta"}`);
   }
-  const data = await response.json();
-  const text = data?.choices?.[0]?.message?.content || "";
-  const jsonText = extractJson(text);
-  try {
-    return JSON.parse(jsonText);
-  } catch {
-    return { title: "", subtitle: "", body: jsonText || text, bullets: [] };
-  }
+  throw lastError || new Error("Errore richiesta Groq");
 };
 
 const rewriteWithMinWords = async (item: RawRssItem) => {
   let prompt = buildPrompt(item);
-  let rewritten = await callGroq(prompt);
+  const rewritten = await callGroq(prompt);
   let title = normalizeText(rewritten.title || item.title);
   let subtitle = normalizeText(rewritten.subtitle || "");
   let body = normalizeText(rewritten.body || item.contentText);
@@ -308,12 +340,12 @@ const rewriteWithMinWords = async (item: RawRssItem) => {
       return { title, subtitle, body, bullets };
     }
     prompt = buildExpansionPrompt(item, title, subtitle, body, bullets, MIN_BODY_WORDS);
-    rewritten = await callGroq(prompt);
-    title = normalizeText(rewritten.title || title || item.title);
-    subtitle = normalizeText(rewritten.subtitle || subtitle || "");
-    body = normalizeText(rewritten.body || body);
-    bullets = Array.isArray(rewritten.bullets)
-      ? rewritten.bullets.map((entry: string) => normalizeText(entry)).filter(Boolean)
+    const expanded = await callGroq(prompt);
+    title = normalizeText(expanded.title || title || item.title);
+    subtitle = normalizeText(expanded.subtitle || subtitle || "");
+    body = normalizeText(expanded.body || body);
+    bullets = Array.isArray(expanded.bullets)
+      ? expanded.bullets.map((entry: string) => normalizeText(entry)).filter(Boolean)
       : bullets;
   }
   return { title, subtitle, body, bullets };
@@ -433,84 +465,58 @@ const News = () => {
   }, []);
 
   const refreshComingsoon = useCallback(async () => {
-    try {
-      const cached = normalizeComingsoonArticles(parseStoredArticles(localStorage.getItem(COMINGSOON_STORAGE_KEY)));
-      const cachedMap = new Map(cached.map((item) => [item.id, item]));
-      const xmlText = await fetchFeedXml(COMINGSOON_FEED_URL);
-      const items = parseRss(xmlText).slice(0, MAX_COMINGSOON);
-      const firestore = await loadFirestore();
-      const refreshed: NewsArticle[] = [];
-      const refreshedIds = new Set<string>();
-      for (const item of items) {
-        const docId = toDocId(item.link);
-        const cachedItem = cachedMap.get(docId);
-        let resolved = false;
-        if (cachedItem) {
-          refreshed.push(cachedItem);
-          refreshedIds.add(docId);
-          resolved = true;
-        }
-        if (!resolved && firestore) {
-          const { db, doc, getDoc, setDoc } = firestore;
-          const docRef = doc(db, "news_comingsoon", docId);
-          const existing = await getDoc(docRef);
-          if (existing.exists()) {
-            const existingData = existing.data() as NewsArticle;
-            const normalized = withPublicId({ ...existingData, id: existingData.id || docId });
-            if (!existingData.publicId && normalized.publicId) {
-              void setDoc(docRef, { publicId: normalized.publicId }, { merge: true });
-            }
-            refreshed.push(normalized);
-            refreshedIds.add(docId);
-            resolved = true;
-          }
-        }
-        if (!resolved) {
-          const { title, subtitle, body, bullets } = await rewriteWithMinWords(item);
-          const publishedAtTs = Date.parse(item.publishedAt) || Date.now();
-          const created = {
-            id: docId,
-            publicId: toPublicId(item.link),
-            title,
-            subtitle,
-            body,
-            bullets,
-            imageUrl: item.imageUrl,
-            sourceUrl: item.link,
-            sourceTitle: item.title,
-            publishedAt: item.publishedAt,
-            publishedAtTs
-          };
-          refreshed.push(created);
-          refreshedIds.add(docId);
-          if (firestore) {
-            const { db, doc, setDoc } = firestore;
-            const docRef = doc(db, "news_comingsoon", docId);
-            await setDoc(docRef, created, { merge: true });
-          }
-        }
+    const cached = normalizeComingsoonArticles(parseStoredArticles(localStorage.getItem(COMINGSOON_STORAGE_KEY)));
+    const xmlText = await fetchFeedXml(COMINGSOON_FEED_URL);
+    const items = parseRss(xmlText).slice(0, MAX_COMINGSOON);
+    const firestore = await loadFirestore();
+    const refreshed: NewsArticle[] = [];
+    const refreshedIds = new Set<string>();
+    for (const item of items) {
+      const docId = toDocId(item.link);
+      const { title, subtitle, body, bullets } = await rewriteWithMinWords(item);
+      const publishedAtTs = Date.parse(item.publishedAt) || Date.now();
+      const created = {
+        id: docId,
+        publicId: toPublicId(item.link),
+        title,
+        subtitle,
+        body,
+        bullets,
+        imageUrl: item.imageUrl,
+        sourceUrl: item.link,
+        sourceTitle: item.title,
+        publishedAt: item.publishedAt,
+        publishedAtTs
+      };
+      refreshed.push(created);
+      refreshedIds.add(docId);
+      if (firestore) {
+        const { db, doc, setDoc } = firestore;
+        const docRef = doc(db, "news_comingsoon", docId);
+        await setDoc(docRef, created, { merge: true });
       }
-      const merged = [
-        ...refreshed,
-        ...cached.filter((article) => !refreshedIds.has(article.id))
-      ].sort((a, b) => b.publishedAtTs - a.publishedAtTs);
-      setTopArticles(merged);
-      localStorage.setItem(COMINGSOON_STORAGE_KEY, JSON.stringify(merged));
-    } catch {
-      return;
     }
+    const merged = [
+      ...refreshed,
+      ...cached.filter((article) => !refreshedIds.has(article.id))
+    ].sort((a, b) => b.publishedAtTs - a.publishedAtTs);
+    setTopArticles(merged);
+    localStorage.setItem(COMINGSOON_STORAGE_KEY, JSON.stringify(merged));
   }, []);
 
   useEffect(() => {
-    refreshComingsoon();
-  }, [refreshComingsoon]);
+    refreshComingsoon().catch((error) => {
+      const message = error instanceof Error ? error.message : "Errore aggiornamento news in evidenza";
+      setLastError(message);
+      toast({ title: message, variant: "destructive" });
+    });
+  }, [refreshComingsoon, toast]);
 
   const handleRefresh = useCallback(async () => {
     setIsLoading(true);
     setLastError(null);
     try {
       const cachedArticles = normalizeStoredArticles(parseStoredArticles(localStorage.getItem(STORAGE_KEY)));
-      const cachedMap = new Map(cachedArticles.map((item) => [item.id, item]));
       const xmlText = await fetchFeedXml(feedUrl);
       const items = parseRss(xmlText).slice(0, MAX_ARTICLES);
       const firestore = await loadFirestore();
@@ -518,27 +524,6 @@ const News = () => {
       const refreshedIds = new Set<string>();
       for (const item of items) {
         const docId = toDocId(item.link);
-        const cached = cachedMap.get(docId);
-        if (cached) {
-          refreshed.push(cached);
-          refreshedIds.add(docId);
-          continue;
-        }
-        if (firestore) {
-          const { db, doc, getDoc, setDoc } = firestore;
-          const docRef = doc(db, "news_articles", docId);
-          const existing = await getDoc(docRef);
-          if (existing.exists()) {
-            const existingData = existing.data() as NewsArticle;
-            const normalized = withPublicId({ ...existingData, id: existingData.id || docId });
-            if (!existingData.publicId && normalized.publicId) {
-              void setDoc(docRef, { publicId: normalized.publicId }, { merge: true });
-            }
-            refreshed.push(normalized);
-            refreshedIds.add(docId);
-            continue;
-          }
-        }
         const { title, subtitle, body, bullets } = await rewriteWithMinWords(item);
         const publishedAtTs = Date.parse(item.publishedAt) || Date.now();
         const imageUrl = item.imageUrl;
@@ -677,6 +662,8 @@ const News = () => {
     autoRefresh();
   }, [autoRefreshDone, handleRefresh]);
 
+  const heroImage = topArticles.find((article) => article.imageUrl)?.imageUrl || "";
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <SEO title="News" description="News su cinema e streaming" />
@@ -708,9 +695,9 @@ const News = () => {
                   to={`/news/article?article=${encodeURIComponent(getArticleLinkId(topArticles[0]))}`}
               className="relative overflow-hidden rounded-2xl bg-secondary/30 min-h-[320px] flex items-end"
             >
-              {topArticles[0].imageUrl ? (
+              {heroImage ? (
                 <OptimizedImage
-                  src={topArticles[0].imageUrl}
+                  src={heroImage}
                   alt={topArticles[0].title}
                   className="absolute inset-0 w-full h-full object-cover"
                   loading="lazy"

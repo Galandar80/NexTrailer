@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { ArrowLeft, X } from "lucide-react";
 import { Trailer } from "@/services/tmdbApi";
 
@@ -21,6 +21,7 @@ export const MediaHero = ({
     showVideo,
     setShowVideo
 }: MediaHeroProps) => {
+    const navigate = useNavigate();
     return (
         <div className="relative h-[50vh] lg:h-[70vh] overflow-hidden">
             <div className="absolute inset-0">
@@ -50,10 +51,14 @@ export const MediaHero = ({
             </div>
 
             <div className="absolute left-4 top-4 z-10">
-                <Link to="/" className="flex items-center text-sm hover:text-accent bg-black/20 backdrop-blur-sm px-3 py-2 rounded-full">
+                <button
+                    type="button"
+                    onClick={() => navigate(-1)}
+                    className="flex items-center text-sm hover:text-accent bg-black/20 backdrop-blur-sm px-3 py-2 rounded-full"
+                >
                     <ArrowLeft className="h-4 w-4 mr-1" />
-                    Torna alla Home
-                </Link>
+                    Torna Indietro
+                </button>
             </div>
 
             {showVideo && trailer && (

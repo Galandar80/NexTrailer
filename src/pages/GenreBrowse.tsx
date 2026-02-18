@@ -14,6 +14,7 @@ const GenreBrowse = () => {
   const { mediaType, genreId } = useParams<{ mediaType: "movie" | "tv", genreId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const genreName = searchParams.get("name") || "Genre";
+  const isAllGenres = genreId === "all";
   const navigate = useNavigate();
 
   const [content, setContent] = useState<MediaItem[]>([]);
@@ -39,20 +40,27 @@ const GenreBrowse = () => {
 
       try {
         console.log(`Loading content for genre: ${genreId}, mediaType: ${mediaType}, filters:`, filters);
-        const items = await tmdbApi.getContentByGenre(
-          mediaType as "movie" | "tv",
-          parseInt(genreId),
-          1,
-          {
-            sortBy: filters.sortBy,
-            year: filters.year
-          }
-        );
+        const items = isAllGenres
+          ? await tmdbApi.discoverMedia({
+              mediaType: mediaType as "movie" | "tv",
+              page: 1,
+              sortBy: filters.sortBy,
+              year: filters.year ? Number(filters.year) : undefined
+            })
+          : await tmdbApi.getContentByGenre(
+              mediaType as "movie" | "tv",
+              parseInt(genreId),
+              1,
+              {
+                sortBy: filters.sortBy,
+                year: filters.year
+              }
+            );
 
         if (items.length === 0) {
           toast({
             title: "Nessun risultato",
-            description: `Nessun contenuto trovato per questo genere: ${genreName}`,
+            description: isAllGenres ? "Nessun contenuto trovato." : `Nessun contenuto trovato per questo genere: ${genreName}`,
             variant: "default",
           });
         } else {
@@ -71,7 +79,7 @@ const GenreBrowse = () => {
     };
 
     loadContent();
-  }, [mediaType, genreId, filters, toast, apiKey, genreName]); // Reload when filters change
+  }, [mediaType, genreId, filters, toast, apiKey, genreName, isAllGenres]);
 
   const handleApplyFilters = (newFilters: typeof filters) => {
     setFilters(newFilters);
@@ -94,15 +102,22 @@ const GenreBrowse = () => {
     const nextPage = currentPage + 1;
 
     try {
-      const additionalContent = await tmdbApi.getContentByGenre(
-        mediaType as "movie" | "tv",
-        parseInt(genreId),
-        nextPage,
-        {
-          sortBy: filters.sortBy,
-          year: filters.year
-        }
-      );
+      const additionalContent = isAllGenres
+        ? await tmdbApi.discoverMedia({
+            mediaType: mediaType as "movie" | "tv",
+            page: nextPage,
+            sortBy: filters.sortBy,
+            year: filters.year ? Number(filters.year) : undefined
+          })
+        : await tmdbApi.getContentByGenre(
+            mediaType as "movie" | "tv",
+            parseInt(genreId),
+            nextPage,
+            {
+              sortBy: filters.sortBy,
+              year: filters.year
+            }
+          );
 
       if (additionalContent.length > 0) {
         setContent(prev => [...prev, ...additionalContent]);
@@ -179,7 +194,7 @@ const GenreBrowse = () => {
                 onChange={(e) => handleApplyFilters({ ...filters, year: e.target.value })}
               >
                 <option value="">Tutti gli anni</option>
-                {Array.from({ length: 50 }, (_, i) => new Date().getFullYear() - i).map(y => (
+                {Array.from({ length: new Date().getFullYear() - 1950 + 1 }, (_, i) => new Date().getFullYear() - i).map(y => (
                   <option key={y} value={y}>{y}</option>
                 ))}
               </select>
@@ -210,7 +225,11 @@ const GenreBrowse = () => {
             {content.length === 0 ? (
               <div className="text-center py-12">
                 <p className="text-muted-foreground">
-                  {apiKey ? "Nessun contenuto trovato per questo genere con i filtri selezionati." : "API key necessaria per visualizzare i contenuti."}
+                  {apiKey
+                    ? isAllGenres
+                      ? "Nessun contenuto trovato con i filtri selezionati."
+                      : "Nessun contenuto trovato per questo genere con i filtri selezionati."
+                    : "API key necessaria per visualizzare i contenuti."}
                 </p>
                 <Button
                   variant="outline"

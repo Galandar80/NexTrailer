@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Film, Star, Calendar } from "lucide-react";
 import { tmdbApi } from "@/services/tmdbApi";
 import Navbar from "@/components/Navbar";
@@ -11,6 +11,7 @@ import { PersonDetails, PersonCredit } from "@/services/api/personApi";
 
 const PersonDetailsPage = () => {
     const { id } = useParams<{ id: string }>();
+    const navigate = useNavigate();
     const [actor, setActor] = useState<PersonDetails | null>(null);
     const [credits, setCredits] = useState<PersonCredit[]>([]);
     const [translatedBio, setTranslatedBio] = useState<string | null>(null);
@@ -158,7 +159,7 @@ const PersonDetailsPage = () => {
                 <Navbar />
                 <div className="h-[60vh] flex flex-col items-center justify-center">
                     <h2 className="text-2xl mb-4 text-destructive">{error || "Attore non trovato"}</h2>
-                    <Button asChild><Link to="/">Torna alla Home</Link></Button>
+                    <Button onClick={() => navigate(-1)}>Torna Indietro</Button>
                 </div>
             </div>
         );

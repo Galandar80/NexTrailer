@@ -1,7 +1,7 @@
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Star, Clock, Play } from "lucide-react";
+import { Star, Clock, Play, Volume2, VolumeX } from "lucide-react";
 import { MediaItem, tmdbApi } from "@/services/tmdbApi";
 import { OptimizedImage } from "@/components/OptimizedImage";
 
@@ -13,13 +13,20 @@ interface MovieCardProps {
 
 export const MovieCard = ({ media, showBadge = false, similarTitle }: MovieCardProps) => {
   const [isHovered, setIsHovered] = useState(false);
+  const [trailerKey, setTrailerKey] = useState<string | null>(null);
+  const [isTrailerVisible, setIsTrailerVisible] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
+  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
 
   const mediaType = media.media_type === "person" ? "person" : (media.media_type || ("title" in media ? "movie" : "tv"));
   const isMovie = mediaType === "movie";
+  const isTv = mediaType === "tv";
+  const isPerson = mediaType === "person";
   const title = isMovie ? media.title : media.name;
   const date = isMovie ? media.release_date : media.first_air_date;
-  const poster = tmdbApi.getImageUrl(media.poster_path, "w342");
+  const imagePath = isPerson ? (media.profile_path || media.poster_path) : media.poster_path;
+  const poster = tmdbApi.getImageUrl(imagePath, "w342");
   const year = date ? new Date(date).getFullYear() : "";
 
   // Dynamic badges
@@ -32,7 +39,11 @@ export const MovieCard = ({ media, showBadge = false, similarTitle }: MovieCardP
     return null;
   };
 
-  const handleClick = () => {
+  const handleClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-audio-toggle]")) {
+      return;
+    }
     if (mediaType === "person") {
       navigate(`/person/${media.id}`);
       return;
@@ -43,7 +54,54 @@ export const MovieCard = ({ media, showBadge = false, similarTitle }: MovieCardP
   const badgeText = getBadgeText();
 
   // Rating to stars (out of 5)
-  const stars = Math.round((media.vote_average / 2) * 10) / 10;
+  const stars = Math.round(((media.vote_average || 0) / 2) * 10) / 10;
+
+  useEffect(() => {
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+      hoverTimeoutRef.current = null;
+    }
+
+    if (!isHovered || isPerson || (!isMovie && !isTv)) {
+      setIsTrailerVisible(false);
+      return;
+    }
+
+    setIsTrailerVisible(false);
+
+    let isActive = true;
+    const previewType = isMovie ? "movie" : "tv";
+
+    hoverTimeoutRef.current = setTimeout(() => {
+      const loadTrailer = async () => {
+        try {
+          let key = trailerKey;
+          if (!key) {
+            const videos = await tmdbApi.getTrailers(media.id, previewType);
+            if (!isActive) return;
+            const first = videos[0];
+            if (first?.key) {
+              key = first.key;
+              setTrailerKey(first.key);
+            }
+          }
+          if (!isActive) return;
+          setIsTrailerVisible(Boolean(key));
+        } catch {
+          if (isActive) setIsTrailerVisible(false);
+        }
+      };
+      void loadTrailer();
+    }, 1500);
+
+    return () => {
+      isActive = false;
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+        hoverTimeoutRef.current = null;
+      }
+    };
+  }, [isHovered, isMovie, isTv, isPerson, media.id, trailerKey]);
 
   return (
     <div
@@ -55,9 +113,35 @@ export const MovieCard = ({ media, showBadge = false, similarTitle }: MovieCardP
       <OptimizedImage
         src={poster}
         alt={title}
-        className="w-full h-full object-cover"
+        className={`w-full h-full object-cover transition-opacity duration-300 ${isTrailerVisible ? "opacity-0" : "opacity-100"}`}
         loading="lazy"
       />
+
+      {isTrailerVisible && trailerKey && (
+        <div className="absolute inset-0 z-10">
+          <iframe
+            title={`${title} trailer`}
+            className="w-full h-full pointer-events-none"
+            src={`https://www.youtube.com/embed/${trailerKey}?autoplay=1&mute=${isMuted ? 1 : 0}&controls=0&rel=0&showinfo=0&playsinline=1&modestbranding=1`}
+            key={`${trailerKey}-${isMuted ? "muted" : "sound"}`}
+            allow="autoplay; encrypted-media; picture-in-picture"
+            allowFullScreen
+          />
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setIsMuted((value) => !value);
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            data-audio-toggle
+            className="absolute top-2 left-2 z-20 bg-black/60 text-white rounded-full h-8 w-8 flex items-center justify-center hover:bg-black/80"
+          >
+            {isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+          </button>
+        </div>
+      )}
 
       {showBadge && badgeText && (
         <div className="movie-badge animate-trailer-pulse">
@@ -65,24 +149,26 @@ export const MovieCard = ({ media, showBadge = false, similarTitle }: MovieCardP
         </div>
       )}
 
-      <div className="hover-card">
+      <div className={`hover-card z-20 ${isTrailerVisible ? "from-black/80 via-black/40" : ""}`}>
         <div className="mb-1 flex justify-between items-end">
           <h3 className="text-base font-semibold line-clamp-2">{title}</h3>
           <span className="text-xs opacity-70">{year}</span>
         </div>
 
-        <div className="flex items-center space-x-2 mb-2">
-          <div className="flex items-center text-amber-400">
-            <Star className="h-3 w-3 fill-amber-400 stroke-0 mr-1" />
-            <span className="text-xs">{stars.toFixed(1)}</span>
-          </div>
-          {isMovie && media.runtime && (
-            <div className="flex items-center text-muted-foreground">
-              <Clock className="h-3 w-3 mr-1" />
-              <span className="text-xs">{media.runtime} min</span>
+        {!isPerson && (
+          <div className="flex items-center space-x-2 mb-2">
+            <div className="flex items-center text-amber-400">
+              <Star className="h-3 w-3 fill-amber-400 stroke-0 mr-1" />
+              <span className="text-xs">{stars.toFixed(1)}</span>
             </div>
-          )}
-        </div>
+            {isMovie && media.runtime && (
+              <div className="flex items-center text-muted-foreground">
+                <Clock className="h-3 w-3 mr-1" />
+                <span className="text-xs">{media.runtime} min</span>
+              </div>
+            )}
+          </div>
+        )}
 
         {similarTitle && (
           <div className="mt-auto text-xs text-muted-foreground">
@@ -91,10 +177,12 @@ export const MovieCard = ({ media, showBadge = false, similarTitle }: MovieCardP
           </div>
         )}
 
-        <button className="mt-2 bg-accent/90 hover:bg-accent text-white py-1 px-3 rounded-full text-xs font-medium flex items-center justify-center w-full">
-          <Play className="h-3 w-3 mr-1" />
-          Preview
-        </button>
+        {!isPerson && (
+          <button className="mt-2 bg-accent/90 hover:bg-accent text-white py-1 px-3 rounded-full text-xs font-medium flex items-center justify-center w-full">
+            <Play className="h-3 w-3 mr-1" />
+            Preview
+          </button>
+        )}
       </div>
     </div>
   );
